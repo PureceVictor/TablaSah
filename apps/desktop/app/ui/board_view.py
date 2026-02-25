@@ -73,11 +73,12 @@ def main():
                     playerClicks.append(squareSelected)
                 if len(playerClicks) == 2:
                     move = Move(playerClicks[0], playerClicks[1], gameState.board)
-                    print("da")
+                    print(move.getChessNotation())
                     #Validam mutarea
-                    if(move  in validMoves):
-                        gameState.makeMove(move)
-                        madeMove = True
+                    for i in range(len(validMoves)):
+                        if move == validMoves[i]:
+                            gameState.makeMove(validMoves[i])
+                            madeMove = True
 
                     squareSelected = ()
                     playerClicks = []

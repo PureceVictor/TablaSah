@@ -21,14 +21,38 @@ class GameState():
         self.pins = []
         self.checks = []
 
+        self.enPassantPossible = () # Coordonatele patratului unde se poate face En Passant
+        self.enPassantPossibleLog = [self.enPassantPossible] # Tine minte istoric pentru Undo
+
     def makeMove(self, move): 
         self.board[move.startRow][move.startCol] = "--"
-        self.board[move.endRow][move.endCol] = move.pieceMoved #mutarea efectiva
+        self.board[move.endRow][move.endCol] = move.pieceMoved # mutarea efectiva normala
+
+        # Promovare pion
+        if move.isPawnPromotion:
+            # move.pieceMoved[0] ia culoarea ('w' sau 'b')
+            # move.promotionChoice ia piesa ('Q', 'R', 'B', 'N')
+            # Le unim (ex: 'w' + 'Q' = 'wQ') si suprascriem pionul ajuns la capat
+            self.board[move.endRow][move.endCol] = move.pieceMoved[0] + move.promotionChoice
 
 
-        self.moveLog.append(move) #istoricul de mutari
+        # Mutare en passant
+        if move.isEnPassantMove:
+            self.board[move.startRow][move.endCol] = "--" # Stergem pionul inamic capturat
+            
+        # Activam en passant
+        # Doar daca un pion a facut fix 2 pasi in fata, activam patratul din spatele lui
+        if move.pieceMoved[1] == 'P' and abs(move.startRow - move.endRow) == 2:
+            self.enPassantPossible = ((move.startRow + move.endRow) // 2, move.startCol)
+        else:
+            self.enPassantPossible = () # Se reseteaza la orice alta mutare pe tabla
+            
+        self.enPassantPossibleLog.append(self.enPassantPossible) # Salvam in istoric
+
+        self.moveLog.append(move) # istoricul de mutari
         self.whiteToMove = not self.whiteToMove
 
+        # Update rege
         if move.pieceMoved == 'wK':
             self.whiteKingLocation = (move.endRow, move.endCol)
         elif move.pieceMoved == 'bK':
@@ -44,12 +68,20 @@ class GameState():
 
             self.whiteToMove = not self.whiteToMove
 
+            # Undo rege
             if move.pieceMoved == 'wK':
                 self.whiteKingLocation = (move.startRow, move.startCol)
             elif move.pieceMoved == 'bK':
                 self.blackKingLocation = (move.startRow, move.startCol)
 
-
+            # Undo en passant
+            if move.isEnPassantMove:
+                self.board[move.endRow][move.endCol] = "--" # Lasam gol patratul de tranzit
+                self.board[move.startRow][move.endCol] = move.pieceCaptured # Inviem pionul inamic langa noi
+                
+            # Undo istoric en passant
+            self.enPassantPossibleLog.pop()
+            self.enPassantPossible = self.enPassantPossibleLog[-1]
 
     #Determinam toate mutarile posibile pentru fiecare piesa in particular
 
@@ -72,25 +104,47 @@ class GameState():
             startRow = 1
             enemyColor = 'w'
 
-        # 1. Mutarea IN FATA (Orizontala pe coloana, vertical pe rand)
+        #Daca randul tinta este 0 sau 7, e promovare 100%
+        isPawnPromotion = False
+        if row + moveAmount == 0 or row + moveAmount == 7:
+            isPawnPromotion = True
+
+        # 1. Mutarea IN FATA
         if self.board[row + moveAmount][col] == "--":
-            if not piecePinned or pinDirection == (moveAmount, 0): # Doar daca nu e legat sau e legat PE VERTICALA
-                moves.append(Move((row, col), (row + moveAmount, col), self.board))
+            if not piecePinned or pinDirection == (moveAmount, 0): 
+                if isPawnPromotion:
+                    for piece in ['Q', 'R', 'B', 'N']:
+                        moves.append(Move((row, col), (row + moveAmount, col), self.board, promotionChoice=piece))
+                else:
+                    moves.append(Move((row, col), (row + moveAmount, col), self.board))
                 
-                # Mutarea dubla (doar daca prima a fost valida)
+                # Mutarea dubla 
                 if row == startRow and self.board[row + 2 * moveAmount][col] == "--":
                     moves.append(Move((row, col), (row + 2 * moveAmount, col), self.board))
 
-        # 2. Capturi
-        if col - 1 >= 0: # Diagonala stanga
+        # 2. Capturi (Diagonala stanga)
+        if col - 1 >= 0: 
             if not piecePinned or pinDirection == (moveAmount, -1):
                 if self.board[row + moveAmount][col - 1][0] == enemyColor:
-                    moves.append(Move((row, col), (row + moveAmount, col - 1), self.board))
+                    if isPawnPromotion:
+                        for piece in ['Q', 'R', 'B', 'N']:
+                            moves.append(Move((row, col), (row + moveAmount, col - 1), self.board, promotionChoice=piece))
+                    else:
+                        moves.append(Move((row, col), (row + moveAmount, col - 1), self.board))
+                elif (row + moveAmount, col - 1) == self.enPassantPossible:
+                    moves.append(Move((row, col), (row + moveAmount, col - 1), self.board, isEnPassantMove=True))
                     
-        if col + 1 <= 7: # Diagonala dreapta
+        # 3. Capturi (Diagonala dreapta)
+        if col + 1 <= 7: 
             if not piecePinned or pinDirection == (moveAmount, 1):
                 if self.board[row + moveAmount][col + 1][0] == enemyColor:
-                    moves.append(Move((row, col), (row + moveAmount, col + 1), self.board))
+                    if isPawnPromotion: 
+                        for piece in ['Q', 'R', 'B', 'N']:
+                            moves.append(Move((row, col), (row + moveAmount, col + 1), self.board, promotionChoice=piece))
+                    else:
+                        moves.append(Move((row, col), (row + moveAmount, col + 1), self.board))
+                elif (row + moveAmount, col + 1) == self.enPassantPossible:
+                    moves.append(Move((row, col), (row + moveAmount, col + 1), self.board, isEnPassantMove=True))
             
 
     def getNightMoves(self, row, col, moves):
@@ -391,7 +445,7 @@ class Move():
     filesToCols = {"a" : 0, "b" : 1, "c" : 2, "d" : 3, "e" : 4, "f" : 5, "g" : 6, "h" : 7}
     colsToFiles = {v: k for k, v in filesToCols.items()}
 
-    def __init__(self, startSquare, endSquare, board):
+    def __init__(self, startSquare, endSquare, board, isEnPassantMove=False, promotionChoice='Q'):
         self.startRow = startSquare[0]
         self.startCol = startSquare[1]
         
@@ -401,11 +455,21 @@ class Move():
         self.pieceMoved = board[self.startRow][self.startCol]
         self.pieceCaptured = board[self.endRow][self.endCol]
 
+        self.isPawnPromotion = False
+        if (self.pieceMoved == "wP" and self.endRow == 0) or (self.pieceMoved == "bP" and self.endRow == 7):
+            self.isPawnPromotion = True
+            
+        self.promotionChoice = promotionChoice # Q, R, B sau N
+
+        self.isEnPassantMove = isEnPassantMove
+        if self.isEnPassantMove:
+            self.pieceCaptured = "bP" if self.pieceMoved == "wP" else "wP"
+
         self.moveID = self.startRow * 1000 + self.startCol * 100 + self.endRow * 10 + self.endCol
 
     def __eq__(self, other):
         if isinstance(other, Move):
-            return self.moveID == other.moveID
+            return self.moveID == other.moveID and self.promotionChoice == other.promotionChoice
         return False 
 
     def getChessNotation(self):
