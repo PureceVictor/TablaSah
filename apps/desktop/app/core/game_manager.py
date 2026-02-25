@@ -24,6 +24,13 @@ class GameState():
         self.enPassantPossible = () # Coordonatele patratului unde se poate face En Passant
         self.enPassantPossibleLog = [self.enPassantPossible] # Tine minte istoric pentru Undo
 
+
+        #Drepturile pentru rocada
+        self.currentCastleRights = CastleRight(True, True, True, True)
+        self.castleRightsLog = [CastleRight(self.currentCastleRights.wks, self.currentCastleRights.bks, self.currentCastleRights.wqs
+                                            ,self.currentCastleRights.bqs)]
+
+
     def makeMove(self, move): 
         self.board[move.startRow][move.startCol] = "--"
         self.board[move.endRow][move.endCol] = move.pieceMoved # mutarea efectiva normala
@@ -59,6 +66,58 @@ class GameState():
             self.blackKingLocation = (move.endRow, move.endCol)
 
 
+        # Mutare de rocada
+
+        if move.isCastleMove:
+            if move.endCol - move.startCol == 2:
+                self.board[move.endRow][move.endCol - 1] = self.board[move.endRow][move.endCol + 1]
+                self.board[move.endRow][move.endCol + 1] = "--"
+            else:
+                self.board[move.endRow][move.endCol + 1] = self.board[move.endRow][move.endCol - 2]
+                self.board[move.endRow][move.endCol - 2] = "--"
+
+        #Verificam drepturile de rocada
+        self.updateCastleRights(move)
+        self.castleRightsLog.append(CastleRight(self.currentCastleRights.wks, self.currentCastleRights.bks, self.currentCastleRights.wqs
+                                            ,self.currentCastleRights.bqs))
+        
+
+
+
+
+    def updateCastleRights(self, move):
+            # 1. Pierdem drepturile daca mutam regele sau tura
+            if move.pieceMoved == "wK":
+                self.currentCastleRights.wks = False
+                self.currentCastleRights.wqs = False
+            elif move.pieceMoved == "bK":
+                self.currentCastleRights.bks = False
+                self.currentCastleRights.bqs = False
+            elif move.pieceMoved == "wR":
+                if move.startRow == 7 and move.startCol == 0: # Turnul stang
+                    self.currentCastleRights.wqs = False
+                elif move.startRow == 7 and move.startCol == 7: # Turnul drept
+                    self.currentCastleRights.wks = False
+            elif move.pieceMoved == "bR":
+                if move.startRow == 0 and move.startCol == 0: 
+                    self.currentCastleRights.bqs = False
+                elif move.startRow == 0 and move.startCol == 7: 
+                    self.currentCastleRights.bks = False
+                    
+            # 2. Pierdem drepturile daca adversarul ne captureaza Tura
+            if move.pieceCaptured == 'wR':
+                if move.endRow == 7 and move.endCol == 0: 
+                    self.currentCastleRights.wqs = False
+                elif move.endRow == 7 and move.endCol == 7:
+                    self.currentCastleRights.wks = False
+            elif move.pieceCaptured == 'bR':
+                if move.endRow == 0 and move.endCol == 0:
+                    self.currentCastleRights.bqs = False
+                elif move.endRow == 0 and move.endCol == 7:
+                    self.currentCastleRights.bks = False
+        
+
+
     def undoMove(self):
         if len(self.moveLog) != 0:
             move = self.moveLog.pop()
@@ -83,6 +142,20 @@ class GameState():
             self.enPassantPossibleLog.pop()
             self.enPassantPossible = self.enPassantPossibleLog[-1]
 
+            # Undo drepturi rocada
+
+            self.castleRightsLog.pop()
+
+            newRights = self.castleRightsLog[-1]
+            self.currentCastleRights = CastleRight(newRights.wks, newRights.bks, newRights.wqs, newRights.bqs)
+            
+            if move.isCastleMove:
+                if move.endCol - move.startCol == 2:
+                    self.board[move.endRow][move.endCol + 1] = self.board[move.endRow][move.endCol - 1]
+                    self.board[move.endRow][move.endCol - 1] = "--"
+                else:
+                    self.board[move.endRow][move.endCol - 2] = self.board[move.endRow][move.endCol + 1]
+                    self.board[move.endRow][move.endCol + 1] = "--"
     #Determinam toate mutarile posibile pentru fiecare piesa in particular
 
     def getPawnMoves(self, row, col, moves):
@@ -146,6 +219,7 @@ class GameState():
                 elif (row + moveAmount, col + 1) == self.enPassantPossible:
                     moves.append(Move((row, col), (row + moveAmount, col + 1), self.board, isEnPassantMove=True))
             
+
 
     def getNightMoves(self, row, col, moves):
         piecePinned = False
@@ -236,6 +310,64 @@ class GameState():
                         self.whiteKingLocation = (row, col)
                     else:
                         self.blackKingLocation = (row, col)
+        self.getCastleMoves(row, col, moves, allyColor)
+
+    def getCastleMoves(self, row, col, moves, allyColor):
+        if self.inCheck:
+            return
+        if (self.whiteToMove and self.currentCastleRights.wks) or (not self.whiteToMove and self.currentCastleRights.bks):
+            self.getKingSideCastleMoves(row, col, moves, allyColor)
+        if (self.whiteToMove and self.currentCastleRights.wqs) or (not self.whiteToMove and self.currentCastleRights.bqs):
+            self.getQueenSideCastleMoves(row, col, moves, allyColor)
+        
+    def getKingSideCastleMoves(self, row, col, moves, allyColor):
+        if self.board[row][col+1] == "--" and self.board[row][col+2]:
+            if not self.squareUnderAttack(row, col + 1) and not self.squareUnderAttack(row, col + 2):
+                moves.append(Move((row, col), (row, col + 2), self.board, isCastleMove = True))
+    def getQueenSideCastleMoves(self, row, col, moves, allyColor):
+        if self.board[row][col-1] == "--" and self.board[row][col-2] == "--" and self.board[row][col-3] == "--":
+            if not self.squareUnderAttack(row, col - 1) and not self.squareUnderAttack(row, col - 2):
+                moves.append(Move((row,col),(row, col - 2), self.board, isCastleMove = True))
+
+    def squareUnderAttack(self, r, c):
+        enemyColor = 'b' if self.whiteToMove else 'w'
+        allyColor = 'w' if self.whiteToMove else 'b'
+        directions = ((-1, 0), (0, -1), (1, 0), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1))
+        
+        for j in range(len(directions)):
+            d = directions[j]
+            for i in range(1, 8):
+                endRow = r + d[0] * i
+                endCol = c + d[1] * i
+                if 0 <= endRow < 8 and 0 <= endCol < 8:
+                    endPiece = self.board[endRow][endCol]
+                    if endPiece[0] == allyColor:
+                        break
+                    elif endPiece[0] == enemyColor:
+                        type = endPiece[1]
+                        # Aceeasi logica de vizare ca la radarul mare
+                        if (0 <= j <= 3 and type == 'R') or \
+                           (4 <= j <= 7 and type == 'B') or \
+                           (i == 1 and type == 'P' and ((enemyColor == 'w' and 6 <= j <= 7) or (enemyColor == 'b' and 4 <= j <= 5))) or \
+                           (type == 'Q') or (i == 1 and type == 'K'):
+                            return True # Am gasit un atacator!
+                        else:
+                            break # E inamic dar nu ataca pe directia asta
+                else:
+                    break
+                    
+        # Verificam caii inamici
+        knightMoves = ((-2, -1), (-2, 1), (-1, -2), (-1, 2), (1, -2), (1, 2), (2, -1), (2, 1))
+        for m in knightMoves:
+            endRow = r + m[0]
+            endCol = c + m[1]
+            if 0 <= endRow < 8 and 0 <= endCol < 8:
+                endPiece = self.board[endRow][endCol]
+                if endPiece[0] == enemyColor and endPiece[1] == 'N':
+                    return True
+                    
+        return False
+
 
     def getRookMoves(self, row, col, moves):
         piecePinned = False
@@ -445,7 +577,7 @@ class Move():
     filesToCols = {"a" : 0, "b" : 1, "c" : 2, "d" : 3, "e" : 4, "f" : 5, "g" : 6, "h" : 7}
     colsToFiles = {v: k for k, v in filesToCols.items()}
 
-    def __init__(self, startSquare, endSquare, board, isEnPassantMove=False, promotionChoice='Q'):
+    def __init__(self, startSquare, endSquare, board, isEnPassantMove=False, promotionChoice='Q', isCastleMove = False):
         self.startRow = startSquare[0]
         self.startCol = startSquare[1]
         
@@ -465,6 +597,8 @@ class Move():
         if self.isEnPassantMove:
             self.pieceCaptured = "bP" if self.pieceMoved == "wP" else "wP"
 
+        self.isCastleMove = isCastleMove
+
         self.moveID = self.startRow * 1000 + self.startCol * 100 + self.endRow * 10 + self.endCol
 
     def __eq__(self, other):
@@ -477,4 +611,13 @@ class Move():
         
     def getRankFile(self, row, col):
         return self.colsToFiles[col] + self.rowsToRanks[row]
+
+
+
+class CastleRight():
+    def __init__(self, wks, bks, wqs, bqs):
+        self.wks = wks
+        self.bks = bks
+        self.wqs = wqs
+        self.bqs = bqs
     
