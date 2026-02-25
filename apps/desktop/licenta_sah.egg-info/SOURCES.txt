@@ -1,0 +1,6 @@
+pyproject.toml
+licenta_sah.egg-info/PKG-INFO
+licenta_sah.egg-info/SOURCES.txt
+licenta_sah.egg-info/dependency_links.txt
+licenta_sah.egg-info/requires.txt
+licenta_sah.egg-info/top_level.txt
