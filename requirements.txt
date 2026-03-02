@@ -1,2 +1,3 @@
--e git+https://github.com/PureceVictor/TablaSah.git@4be83c9d33a9dd975dff8c63a4b6d41f6168ac5a#egg=licenta_sah&subdirectory=apps\desktop
-pygame==2.6.1
+PyQt6==6.10.2
+PyQt6-Qt6==6.10.2
+PyQt6_sip==13.11.0

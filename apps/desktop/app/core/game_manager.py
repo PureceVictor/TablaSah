@@ -11,62 +11,64 @@ class GameState():
             ["wR","wN","wB","wQ","wK","wB","wN","wR"]
         ]
         self.whiteToMove = True
-        self.moveLog = []
+        
+        # --- NOUL SISTEM DE ARBORE ---
+        self.root = MoveNode(None) # Radacina invizibila a partidei
+        self.current_node = self.root # Pointer-ul care arata unde suntem acum
+        # (Am sters self.moveLog)
+        
         self.whiteKingLocation = (7, 4)
         self.blackKingLocation = (0, 4)
         self.checkMate = False
         self.staleMate = False
-
         self.inCheck = False
         self.pins = []
         self.checks = []
 
-        self.enPassantPossible = () # Coordonatele patratului unde se poate face En Passant
-        self.enPassantPossibleLog = [self.enPassantPossible] # Tine minte istoric pentru Undo
+        self.enPassantPossible = ()
+        self.enPassantPossibleLog = [self.enPassantPossible]
 
-
-        #Drepturile pentru rocada
         self.currentCastleRights = CastleRight(True, True, True, True)
-        self.castleRightsLog = [CastleRight(self.currentCastleRights.wks, self.currentCastleRights.bks, self.currentCastleRights.wqs
-                                            ,self.currentCastleRights.bqs)]
-
+        self.castleRightsLog = [CastleRight(self.currentCastleRights.wks, self.currentCastleRights.bks, 
+                                            self.currentCastleRights.wqs, self.currentCastleRights.bqs)]
 
     def makeMove(self, move): 
-        self.board[move.startRow][move.startCol] = "--"
-        self.board[move.endRow][move.endCol] = move.pieceMoved # mutarea efectiva normala
+        # 1. LOGICA DE ARBORE (Verificam daca mutarea exista deja in variatii)
+        existing_child = None
+        for child in self.current_node.children:
+            if child.move == move:
+                existing_child = child
+                break
+                
+        if existing_child:
+            self.current_node = existing_child # Doar inaintam pe ramura existenta
+        else:
+            # Cream o noua ramura
+            self.current_node = self.current_node.add_variation(move)
 
-        # Promovare pion
+        # 2. LOGICA DE TABLA (Ramane la fel)
+        self.board[move.startRow][move.startCol] = "--"
+        self.board[move.endRow][move.endCol] = move.pieceMoved 
+
         if move.isPawnPromotion:
-            # move.pieceMoved[0] ia culoarea ('w' sau 'b')
-            # move.promotionChoice ia piesa ('Q', 'R', 'B', 'N')
-            # Le unim (ex: 'w' + 'Q' = 'wQ') si suprascriem pionul ajuns la capat
             self.board[move.endRow][move.endCol] = move.pieceMoved[0] + move.promotionChoice
 
-
-        # Mutare en passant
         if move.isEnPassantMove:
-            self.board[move.startRow][move.endCol] = "--" # Stergem pionul inamic capturat
+            self.board[move.startRow][move.endCol] = "--" 
             
-        # Activam en passant
-        # Doar daca un pion a facut fix 2 pasi in fata, activam patratul din spatele lui
         if move.pieceMoved[1] == 'P' and abs(move.startRow - move.endRow) == 2:
             self.enPassantPossible = ((move.startRow + move.endRow) // 2, move.startCol)
         else:
-            self.enPassantPossible = () # Se reseteaza la orice alta mutare pe tabla
+            self.enPassantPossible = () 
             
-        self.enPassantPossibleLog.append(self.enPassantPossible) # Salvam in istoric
+        self.enPassantPossibleLog.append(self.enPassantPossible)
 
-        self.moveLog.append(move) # istoricul de mutari
         self.whiteToMove = not self.whiteToMove
 
-        # Update rege
         if move.pieceMoved == 'wK':
             self.whiteKingLocation = (move.endRow, move.endCol)
         elif move.pieceMoved == 'bK':
             self.blackKingLocation = (move.endRow, move.endCol)
-
-
-        # Mutare de rocada
 
         if move.isCastleMove:
             if move.endCol - move.startCol == 2:
@@ -76,14 +78,54 @@ class GameState():
                 self.board[move.endRow][move.endCol + 1] = self.board[move.endRow][move.endCol - 2]
                 self.board[move.endRow][move.endCol - 2] = "--"
 
-        #Verificam drepturile de rocada
         self.updateCastleRights(move)
-        self.castleRightsLog.append(CastleRight(self.currentCastleRights.wks, self.currentCastleRights.bks, self.currentCastleRights.wqs
-                                            ,self.currentCastleRights.bqs))
-        
+        self.castleRightsLog.append(CastleRight(self.currentCastleRights.wks, self.currentCastleRights.bks, 
+                                                self.currentCastleRights.wqs, self.currentCastleRights.bqs))
 
+    def undoMove(self):
+        # Daca pointer-ul nu este la radacina, putem da inapoi
+        if self.current_node.parent is not None:
+            # Luam mutarea de pe nodul curent
+            move = self.current_node.move
 
+            self.board[move.startRow][move.startCol] = move.pieceMoved
+            self.board[move.endRow][move.endCol] = move.pieceCaptured
 
+            self.whiteToMove = not self.whiteToMove
+
+            if move.pieceMoved == 'wK':
+                self.whiteKingLocation = (move.startRow, move.startCol)
+            elif move.pieceMoved == 'bK':
+                self.blackKingLocation = (move.startRow, move.startCol)
+
+            if move.isEnPassantMove:
+                self.board[move.endRow][move.endCol] = "--" 
+                self.board[move.startRow][move.endCol] = move.pieceCaptured 
+                
+            self.enPassantPossibleLog.pop()
+            self.enPassantPossible = self.enPassantPossibleLog[-1]
+
+            self.castleRightsLog.pop()
+            newRights = self.castleRightsLog[-1]
+            self.currentCastleRights = CastleRight(newRights.wks, newRights.bks, newRights.wqs, newRights.bqs)
+            
+            if move.isCastleMove:
+                if move.endCol - move.startCol == 2:
+                    self.board[move.endRow][move.endCol + 1] = self.board[move.endRow][move.endCol - 1]
+                    self.board[move.endRow][move.endCol - 1] = "--"
+                else:
+                    self.board[move.endRow][move.endCol - 2] = self.board[move.endRow][move.endCol + 1]
+                    self.board[move.endRow][move.endCol + 1] = "--"
+            
+            # MAGIA: Mutam pointer-ul inapoi catre parinte
+            self.current_node = self.current_node.parent
+            
+    def redoMove(self, variation_index=0):
+        """Muta inainte pe Main Line (index 0) sau pe o alta variatie"""
+        if len(self.current_node.children) > variation_index:
+            next_node = self.current_node.children[variation_index]
+            self.makeMove(next_node.move)
+            # makeMove e destul de inteligent incat sa nu duplice mutarea, ci doar va inainta
 
     def updateCastleRights(self, move):
             # 1. Pierdem drepturile daca mutam regele sau tura
@@ -118,44 +160,7 @@ class GameState():
         
 
 
-    def undoMove(self):
-        if len(self.moveLog) != 0:
-            move = self.moveLog.pop()
-
-            self.board[move.startRow][move.startCol] = move.pieceMoved
-            self.board[move.endRow][move.endCol] = move.pieceCaptured
-
-            self.whiteToMove = not self.whiteToMove
-
-            # Undo rege
-            if move.pieceMoved == 'wK':
-                self.whiteKingLocation = (move.startRow, move.startCol)
-            elif move.pieceMoved == 'bK':
-                self.blackKingLocation = (move.startRow, move.startCol)
-
-            # Undo en passant
-            if move.isEnPassantMove:
-                self.board[move.endRow][move.endCol] = "--" # Lasam gol patratul de tranzit
-                self.board[move.startRow][move.endCol] = move.pieceCaptured # Inviem pionul inamic langa noi
-                
-            # Undo istoric en passant
-            self.enPassantPossibleLog.pop()
-            self.enPassantPossible = self.enPassantPossibleLog[-1]
-
-            # Undo drepturi rocada
-
-            self.castleRightsLog.pop()
-
-            newRights = self.castleRightsLog[-1]
-            self.currentCastleRights = CastleRight(newRights.wks, newRights.bks, newRights.wqs, newRights.bqs)
-            
-            if move.isCastleMove:
-                if move.endCol - move.startCol == 2:
-                    self.board[move.endRow][move.endCol + 1] = self.board[move.endRow][move.endCol - 1]
-                    self.board[move.endRow][move.endCol - 1] = "--"
-                else:
-                    self.board[move.endRow][move.endCol - 2] = self.board[move.endRow][move.endCol + 1]
-                    self.board[move.endRow][move.endCol + 1] = "--"
+    
     #Determinam toate mutarile posibile pentru fiecare piesa in particular
 
     def getPawnMoves(self, row, col, moves):
@@ -559,6 +564,77 @@ class GameState():
                     checks.append((endRow, endCol, m[0], m[1]))
                     
         return inCheck, pins, checks
+    
+
+    # Adauga aceste functii in clasa GameState
+    def getNotationText(self):
+        # Adaugam putin CSS pentru a arata ca niste link-uri curate
+        html = "<style>a { text-decoration: none; color: #1a5f7a; font-weight: bold;} a:hover { color: #e67e22; }</style>"
+        html += self._generate_tree_text(self.root, 1, True)
+        return html
+
+    def _generate_tree_text(self, node, move_number, is_white_turn):
+        if not node.children:
+            return ""
+            
+        text = ""
+        main_child = node.children[0]
+        
+        if is_white_turn:
+            text += f"<b>{move_number}.</b> "
+            
+        # Piesa de rezistenta: ID-ul nodului devine URL-ul link-ului!
+        text += f'<a href="move:{main_child.node_id}">{main_child.move.getChessNotation()}</a> '
+        
+        for i in range(1, len(node.children)):
+            var_child = node.children[i]
+            text += "<br>&nbsp;&nbsp;&nbsp;<i>( "
+            if is_white_turn:
+                text += f"{move_number}. "
+            else:
+                text += f"{move_number}... "
+                
+            text += f'<a href="move:{var_child.node_id}">{var_child.move.getChessNotation()}</a> '
+            text += self._generate_tree_text(var_child, move_number if is_white_turn else move_number + 1, not is_white_turn)
+            text += ")</i><br>"
+            
+        next_move_num = move_number if is_white_turn else move_number + 1
+        text += self._generate_tree_text(main_child, next_move_num, not is_white_turn)
+        return text
+
+    # 2. SISTEMUL DE TELEPORTARE (TIME TRAVEL)
+    def find_node(self, current, target_id):
+        """Cauta recursiv un nod in arbore dupa ID-ul lui"""
+        if current.node_id == target_id:
+            return current
+        for child in current.children:
+            found = self.find_node(child, target_id)
+            if found:
+                return found
+        return None
+
+    def play_to_node(self, target_node_id):
+        """Teleporteaza starea partidei la nodul selectat"""
+        target_node = self.find_node(self.root, target_node_id)
+        if not target_node:
+            return
+
+        # Aflam drumul de la radacina pana la nodul dorit
+        path = []
+        curr = target_node
+        while curr.parent is not None:
+            path.append(curr.move)
+            curr = curr.parent
+        path.reverse()
+
+        # Derulam timpul inapoi pana la pozitia de start a partidei
+        while self.current_node.parent is not None:
+            self.undoMove()
+
+        # Re-aplicam mutarile pana la destinatie. 
+        # makeMove e deja inteligent: nu va crea variatii noi, ci se va plimba pe cele existente!
+        for move in path:
+            self.makeMove(move)
 
         
 
@@ -612,6 +688,27 @@ class Move():
     def getRankFile(self, row, col):
         return self.colsToFiles[col] + self.rowsToRanks[row]
 
+
+class MoveNode:
+    def __init__(self, move, parent=None):
+        self.move = move
+        self.parent = parent
+        self.children = [] # Lista de MoveNode. Index 0 = Main Line.
+        
+        # Generam un ID unic pentru a-l gasi usor din UI cand dam click
+        self.node_id = str(id(self)) 
+
+    def add_variation(self, move):
+        """Adauga o variatie si returneaza noul nod creat"""
+        new_node = MoveNode(move, parent=self)
+        self.children.append(new_node)
+        return new_node
+        
+    def promote_to_main_line(self):
+        """Face ca aceasta variatie sa devina prima optiune (Main Line)"""
+        if self.parent:
+            self.parent.children.remove(self)
+            self.parent.children.insert(0, self)
 
 
 class CastleRight():
