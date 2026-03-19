@@ -566,7 +566,11 @@ class GameState():
         return inCheck, pins, checks
     
 
-    # Adauga aceste functii in clasa GameState
+    """
+    
+    FUNCTII PENTRU LOGICA DE NOTARE GRAFICA A PARTIDEI, SALVAREA ACESTEIA SI TOT CE TINE DE O INTERACTIUNE COMPLETA
+    
+    """
     def getNotationText(self):
         # Adaugam putin CSS pentru a arata ca niste link-uri curate
         html = "<style>a { text-decoration: none; color: #1a5f7a; font-weight: bold;} a:hover { color: #e67e22; }</style>"
@@ -636,6 +640,49 @@ class GameState():
         for move in path:
             self.makeMove(move)
 
+
+
+    def get_clean_pgn(self):
+        """Genereaza textul partidei fara tag-uri HTML pentru salvarea in fisier."""
+        return self._generate_clean_text(self.root, 1, True)
+
+    def _generate_clean_text(self, node, move_number, is_white_turn):
+        if not node.children:
+            return ""
+        text = ""
+        main_child = node.children[0]
+        if is_white_turn:
+            text += f"{move_number}. "
+        text += f"{main_child.move.getChessNotation()} "
+        for i in range(1, len(node.children)):
+            var_child = node.children[i]
+            text += "( "
+            if is_white_turn:
+                text += f"{move_number}. "
+            else:
+                text += f"{move_number}... "
+            text += f"{var_child.move.getChessNotation()} "
+            text += self._generate_clean_text(var_child, move_number if is_white_turn else move_number + 1, not is_white_turn)
+            text += ") "
+        next_move_num = move_number if is_white_turn else move_number + 1
+        text += self._generate_clean_text(main_child, next_move_num, not is_white_turn)
+        return text
+        
+    def load_fen(self, fen_string):
+        """Placeholder pentru viitorul parser FEN"""
+        print(f"[ENGINE] S-a cerut incarcarea pozitiei: {fen_string}")
+        # Aici vom scrie logica de transformare a FEN-ului in matricea self.board
+
+    def get_current_uci_path(self):
+        """Returneaza lista de mutari UCI de la radacina pana la pozitia curenta"""
+        path = []
+        curr = self.current_node
+        while curr.parent is not None:
+            path.append(curr.move.get_uci())
+            curr = curr.parent
+        path.reverse()
+        return path
+
         
 
 class Move():
@@ -687,6 +734,13 @@ class Move():
         
     def getRankFile(self, row, col):
         return self.colsToFiles[col] + self.rowsToRanks[row]
+
+    def get_uci(self):
+        """Returneaza mutarea in format UCI (ex: e2e4, e7e8q) pt Stockfish"""
+        start = self.getRankFile(self.startRow, self.startCol)
+        end = self.getRankFile(self.endRow, self.endCol)
+        promo = self.promotionChoice.lower() if self.isPawnPromotion else ""
+        return start + end + promo
 
 
 class MoveNode:

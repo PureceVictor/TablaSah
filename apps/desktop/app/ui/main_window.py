@@ -8,6 +8,8 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHB
 from PyQt6.QtCore import Qt
 from app.ui.game_window import GameWindow
 from app.ui.db_explorer_window import DatabaseExplorerWindow
+from PyQt6.QtWidgets import QFileDialog, QMessageBox
+from app.io.pgn_parser import PGNParser
 
 class HubWindow(QMainWindow):
     def __init__(self):
@@ -38,6 +40,7 @@ class HubWindow(QMainWindow):
         
         btn_import = QPushButton("Importa PGN (Baza de date)")
         btn_import.setFixedHeight(50)
+        btn_import.clicked.connect(self.import_pgn_file)
         
         btn_settings = QPushButton("Setari AI & Hardware")
         btn_settings.setFixedHeight(50)
@@ -90,6 +93,32 @@ class HubWindow(QMainWindow):
         explorer = DatabaseExplorerWindow(db_name)
         self.active_explorers.append(explorer)
         explorer.show()
+
+    def import_pgn_file(self):
+        """Deschide un fisier PGN si il incarca intr-o fereastra de joc noua"""
+        file_path, _ = QFileDialog.getOpenFileName(self, "Deschide Meci PGN", "", "PGN Files (*.pgn)")
+        
+        if file_path:
+            # 1. Deschidem o fereastra noua de sah
+            game_window = GameWindow()
+            self.active_games.append(game_window)
+            
+            # 2. Rulam parser-ul pe GameState-ul acelei ferestre
+            headers = PGNParser.load_pgn_to_gamestate(file_path, game_window.game_state)
+            
+            if headers:
+                # 3. Daca a mers, schimbam titlul ferestrei si actualizam UI-ul
+                white = headers.get("White", "Alb")
+                black = headers.get("Black", "Negru")
+                date = headers.get("Date", "????")
+                
+                game_window.setWindowTitle(f"{white} vs {black} ({date})")
+                game_window.update_notation()
+                game_window.board_widget.draw_board_and_pieces()
+                
+                game_window.show()
+            else:
+                QMessageBox.critical(self, "Eroare", "Nu s-a putut parsa fisierul PGN!")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

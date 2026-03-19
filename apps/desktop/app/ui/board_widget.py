@@ -4,6 +4,7 @@ from PyQt6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsRectItem, QG
 from PyQt6.QtGui import QColor, QPixmap, QBrush, QPen
 from PyQt6.QtCore import Qt
 from app.core.game_manager import Move
+from app.ui.promotion_dialog import PromotionDialog
 
 class BoardWidget(QGraphicsView):
     def __init__(self, game_state, on_move_callback=None):
@@ -101,14 +102,11 @@ class BoardWidget(QGraphicsView):
                         self.scene.addItem(circle)
 
     def mousePressEvent(self, event):
-        """Inlocuieste event loop-ul din Pygame. Este chemat automat de PyQt la fiecare click."""
         if event.button() == Qt.MouseButton.LeftButton:
-            # Mapam coordonatele click-ului din ecran la coordonatele Scenei (80x80)
             scene_pos = self.mapToScene(event.pos())
             col = int(scene_pos.x() // self.sq_size)
             row = int(scene_pos.y() // self.sq_size)
             
-            # Ne asiguram ca userul nu da click in afara matricii 8x8
             if 0 <= row <= 7 and 0 <= col <= 7:
                 if self.square_selected == (row, col):
                     self.square_selected = ()
@@ -120,23 +118,44 @@ class BoardWidget(QGraphicsView):
                 if len(self.player_clicks) == 2:
                     move = Move(self.player_clicks[0], self.player_clicks[1], self.game_state.board)
                     
-                    made_move = False
+                    # 1. Filtram toate mutarile valide care au aceleasi coordonate de start si end
+                    matching_moves = []
                     for valid_move in self.valid_moves:
-                        if move == valid_move:
-                            self.game_state.makeMove(valid_move)
-                            made_move = True
-                            self.square_selected = ()
-                            self.player_clicks = []
-                            self.valid_moves = self.game_state.allValidMoves()
+                        if move.startRow == valid_move.startRow and move.startCol == valid_move.startCol \
+                           and move.endRow == valid_move.endRow and move.endCol == valid_move.endCol:
+                            matching_moves.append(valid_move)
                             
-                            # 2. Anuntam fereastra ca s-a facut o mutare cu succes!
-                            if self.on_move_callback:
-                                self.on_move_callback()
-                                
-                            break
-                    if not made_move:
-                        # Daca a dat click aiurea, mutam selectia pe noua piesa
+                    # Daca am gasit cel putin o mutare, inseamna ca utilizatorul a facut o miscare legala
+                    if len(matching_moves) > 0:
+                        selected_move = matching_moves[0] # Alegem prima varianta default
+                        
+                        # 2. VERIFICAM DACA E PROMOVARE
+                        if selected_move.isPawnPromotion:
+                            # Aflam culoarea ca sa stim ce poze aratam in pop-up
+                            color = 'w' if self.game_state.whiteToMove else 'b'
+                            
+                            # Deschidem fereastra si oprim executia pana alege userul
+                            dialog = PromotionDialog(color, self.images)
+                            dialog.exec() 
+                            choice = dialog.get_choice()
+                            
+                            # Acum ca avem alegerea ('Q', 'R', etc), cautam exact acea mutare
+                            for m in matching_moves:
+                                if m.promotionChoice == choice:
+                                    selected_move = m
+                                    break
+                                    
+                        # 3. Executam mutarea finala selectata
+                        self.game_state.makeMove(selected_move)
+                        self.square_selected = ()
+                        self.player_clicks = []
+                        self.valid_moves = self.game_state.allValidMoves()
+                        
+                        # Anuntam fereastra principala sa faca update la text
+                        if self.on_move_callback:
+                            self.on_move_callback()
+                    else:
+                        # Mutarea a fost invalida, pastram click-ul pe noua piesa selectata
                         self.player_clicks = [self.square_selected]
                         
-                # Cerem redesenarea tablei cu noua stare
                 self.draw_board_and_pieces()
