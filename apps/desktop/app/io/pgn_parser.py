@@ -70,3 +70,82 @@ class PGNParser:
         except Exception as e:
             print(f"Eroare la parsarea PGN: {e}")
             return None
+        
+
+    @staticmethod
+    def scan_pgn_headers(file_path):
+        """Scaneaza rapid fisierul si extrage doar metadatele si locatia (offset) fiecarui meci."""
+        games_data = []
+        try:
+            with open(file_path, "r", encoding="latin-1") as f:
+                while True:
+                    offset = f.tell() # Salvam byte-ul exact unde incepe meciul
+                    headers = chess.pgn.read_headers(f)
+                    if headers is None:
+                        break # Am ajuns la finalul fisierului
+                    
+                    games_data.append({
+                        "offset": offset,
+                        "White": headers.get("White", "?"),
+                        "Black": headers.get("Black", "?"),
+                        "WhiteElo": headers.get("WhiteElo", ""),
+                        "BlackElo": headers.get("BlackElo", ""),
+                        "Result": headers.get("Result", "*"),
+                        "Date": headers.get("Date", "????.??.??"),
+                        "Event": headers.get("Event", "?")
+                    })
+            return games_data
+        except Exception as e:
+            print(f"[EROARE SCANARE PGN] {e}")
+            return []
+            
+    @staticmethod
+    def load_game_from_offset(file_path, offset, game_state):
+        """Incarca un singur meci sarind direct la locatia lui pe hard disk."""
+        try:
+            with open(file_path, "r", encoding="latin-1") as f:
+                f.seek(offset) # Magia: sarim direct la meciul cerut
+                game = chess.pgn.read_game(f)
+                if game is None:
+                    return None
+                    
+                headers = dict(game.headers)
+                
+                # Traducerea clasica (la fel ca la load_pgn_to_gamestate)
+                files_to_cols = {"a": 0, "b": 1, "c": 2, "d": 3, "e": 4, "f": 5, "g": 6, "h": 7}
+                ranks_to_rows = {"1": 7, "2": 6, "3": 5, "4": 4, "5": 3, "6": 2, "7": 1, "8": 0}
+
+                for move in game.mainline_moves():
+                    uci_str = move.uci()
+                    start_col = files_to_cols[uci_str[0]]
+                    start_row = ranks_to_rows[uci_str[1]]
+                    end_col = files_to_cols[uci_str[2]]
+                    end_row = ranks_to_rows[uci_str[3]]
+                    
+                    promotion_choice = uci_str[4].upper() if len(uci_str) == 5 else 'Q'
+                    
+                    valid_moves = game_state.allValidMoves()
+                    move_applied = False
+                    for v_move in valid_moves:
+                        if (v_move.startRow == start_row and v_move.startCol == start_col and 
+                            v_move.endRow == end_row and v_move.endCol == end_col):
+                            if v_move.isPawnPromotion:
+                                if v_move.promotionChoice == promotion_choice:
+                                    game_state.makeMove(v_move)
+                                    move_applied = True
+                                    break
+                            else:
+                                game_state.makeMove(v_move)
+                                move_applied = True
+                                break
+                                
+                    if not move_applied:
+                        break # Oprim daca o mutare e corupta
+                        
+                while game_state.current_node.parent is not None:
+                    game_state.undoMove()
+                    
+                return headers
+        except Exception as e:
+            print(f"[EROARE INCARCARE OFFSET] {e}")
+            return None

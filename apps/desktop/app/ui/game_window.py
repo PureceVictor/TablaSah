@@ -246,6 +246,12 @@ class GameWindow(QMainWindow):
         else:
             self.tab_training.setHtml("<i>Asteapta prima mutare...</i>")
 
+        if hasattr(self, 'engine_worker') and self.engine_worker is not None:
+            # Daca panoul verde este deschis, ii trimitem noul drum de mutari (UCI)
+            if not self.engine_container.isHidden():
+                uci_path = self.game_state.get_current_uci_path()
+                self.engine_worker.update_position(uci_path)
+
     def on_notation_clicked(self, url):
         url_str = url.toString()
         if url_str.startswith("move:"):

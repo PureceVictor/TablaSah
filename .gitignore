@@ -17,3 +17,10 @@ Thumbs.db
 #chess engines
 
 apps/desktop/app/engine/
+
+# Partide si baze de date
+
+*.pgn
+*.db
+
+

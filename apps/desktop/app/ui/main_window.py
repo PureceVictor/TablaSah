@@ -4,7 +4,7 @@ import os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
-from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QListWidget, QTabWidget
+from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QListWidget, QTabWidget, QListWidgetItem
 from PyQt6.QtCore import Qt
 from app.ui.game_window import GameWindow
 from app.ui.db_explorer_window import DatabaseExplorerWindow
@@ -26,7 +26,7 @@ class HubWindow(QMainWindow):
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout(central_widget)
         
-        # --- ZONA STANGA: Meniul de actiuni ---
+# --- ZONA STANGA: Meniul de actiuni ---
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         left_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -38,16 +38,24 @@ class HubWindow(QMainWindow):
         btn_new_game.setFixedHeight(50)
         btn_new_game.clicked.connect(self.open_new_game)
         
-        btn_import = QPushButton("Importa PGN (Baza de date)")
-        btn_import.setFixedHeight(50)
-        btn_import.clicked.connect(self.import_pgn_file)
+        # 1. Butonul pentru un singur meci
+        btn_import_single = QPushButton("Importa Meci PGN (Partida Singura)")
+        btn_import_single.setFixedHeight(50)
+        btn_import_single.clicked.connect(self.import_single_pgn)
+        
+        # 2. Noul Buton pentru Baze de Date
+        btn_add_db = QPushButton("Adauga Baza de Date (.PGN)")
+        btn_add_db.setFixedHeight(50)
+        btn_add_db.setStyleSheet("background-color: #2196F3; color: white; font-weight: bold;") 
+        btn_add_db.clicked.connect(self.action_add_database_to_list)
         
         btn_settings = QPushButton("Setari AI & Hardware")
         btn_settings.setFixedHeight(50)
         
         left_layout.addWidget(lbl_profile)
         left_layout.addWidget(btn_new_game)
-        left_layout.addWidget(btn_import)
+        left_layout.addWidget(btn_import_single)
+        left_layout.addWidget(btn_add_db)
         left_layout.addWidget(btn_settings)
         
 # --- ZONA DREAPTA: Sistem de Tab-uri ---
@@ -66,11 +74,6 @@ class HubWindow(QMainWindow):
         
         # Tab 2: Baze de Date
         self.db_list = QListWidget()
-        self.db_list.addItems([
-            "Mega Database 2024 (5.2M partide)",
-            "Repertoriu Deschideri Alb",
-            "Tacticile lui Kasparov"
-        ])
         # Conectam dublu-click-ul la deschiderea explorer-ului
         self.db_list.itemDoubleClicked.connect(self.open_db_explorer)
         self.tabs.addTab(self.db_list, "Baze de Date")
@@ -87,27 +90,70 @@ class HubWindow(QMainWindow):
         self.active_games.append(game)
         game.show()
 
-    def open_db_explorer(self, item):
-        """Instantiaza explorer-ul pentru baza de date selectata"""
-        db_name = item.text()
-        explorer = DatabaseExplorerWindow(db_name)
-        self.active_explorers.append(explorer)
-        explorer.show()
-
-    def import_pgn_file(self):
-        """Deschide un fisier PGN si il incarca intr-o fereastra de joc noua"""
-        file_path, _ = QFileDialog.getOpenFileName(self, "Deschide Meci PGN", "", "PGN Files (*.pgn)")
+    def action_add_database_to_list(self):
+        """Deschide un dialog ca utilizatorul sa gaseasca fisierul .pgn urias si il adauga in meniul din dreapta"""
+        file_path, _ = QFileDialog.getOpenFileName(self, "Adauga Baza de Date PGN", "", "PGN Files (*.pgn)")
         
         if file_path:
-            # 1. Deschidem o fereastra noua de sah
+            # Extragem doar numele fisierului pentru a arata frumos in UI (ex: Mega2019.pgn)
+            file_name = os.path.basename(file_path)
+            
+            # Cream item-ul pentru lista
+            item = QListWidgetItem(f"📚 {file_name}")
+            
+            # SECRETUL: Ascundem calea completa a fisierului in spatele item-ului!
+            item.setData(Qt.ItemDataRole.UserRole, file_path)
+            
+            # Adaugam in tab-ul din dreapta
+            self.db_list.addItem(item)
+            
+            # Mutam focusul pe tab-ul de baze de date ca sa vada utilizatorul ce s-a intamplat
+            self.tabs.setCurrentIndex(1) 
+
+    def open_db_explorer(self, item):
+        """Se activeaza la dublu-click pe lista din dreapta si deschide tabelul cu sute de meciuri"""
+        # Recuperam calea secreta a fisierului
+        file_path = item.data(Qt.ItemDataRole.UserRole)
+        
+        if not file_path or not os.path.exists(file_path):
+            QMessageBox.warning(self, "Eroare", "Fisierul PGN nu mai exista la calea specificata!")
+            return
+
+        explorer = DatabaseExplorerWindow(file_path, self)
+        
+        # Daca utilizatorul a dat dublu click pe un meci in TABEL (accept()) si avem un offset
+        if explorer.exec() and explorer.selected_offset is not None:
+            
             game_window = GameWindow()
             self.active_games.append(game_window)
             
-            # 2. Rulam parser-ul pe GameState-ul acelei ferestre
+            # Incarcam meciul direct de la pozitia indicata (offset)
+            headers = PGNParser.load_game_from_offset(file_path, explorer.selected_offset, game_window.game_state)
+            
+            if headers:
+                white = headers.get("White", "Alb")
+                black = headers.get("Black", "Negru")
+                date = headers.get("Date", "????")
+                
+                game_window.setWindowTitle(f"{white} vs {black} ({date})")
+                game_window.update_notation()
+                game_window.board_widget.draw_board_and_pieces()
+                
+                game_window.show()
+            else:
+                QMessageBox.critical(self, "Eroare", "Nu s-a putut parsa meciul ales din baza de date!")
+
+    def import_single_pgn(self):
+        """Deschide un fisier PGN cu un singur meci si il incarca direct pe tabla"""
+        file_path, _ = QFileDialog.getOpenFileName(self, "Deschide Meci PGN", "", "PGN Files (*.pgn)")
+        
+        if file_path:
+            game_window = GameWindow()
+            self.active_games.append(game_window)
+            
             headers = PGNParser.load_pgn_to_gamestate(file_path, game_window.game_state)
             
             if headers:
-                # 3. Daca a mers, schimbam titlul ferestrei si actualizam UI-ul
                 white = headers.get("White", "Alb")
                 black = headers.get("Black", "Negru")
                 date = headers.get("Date", "????")
@@ -119,6 +165,35 @@ class HubWindow(QMainWindow):
                 game_window.show()
             else:
                 QMessageBox.critical(self, "Eroare", "Nu s-a putut parsa fisierul PGN!")
+
+    def open_database_explorer(self):
+        """Deschide Explorer-ul de Baze de Date (Tabelul) pentru fisiere cu mai multe meciuri"""
+        file_path, _ = QFileDialog.getOpenFileName(self, "Deschide Baza de Date PGN", "", "PGN Files (*.pgn)")
+        
+        if file_path:
+            explorer = DatabaseExplorerWindow(file_path, self)
+            
+            # Daca utilizatorul a dat dublu click pe un meci (accept()) si avem un offset
+            if explorer.exec() and explorer.selected_offset is not None:
+                
+                game_window = GameWindow()
+                self.active_games.append(game_window)
+                
+                # Incarcam meciul direct de la pozitia indicata (offset)
+                headers = PGNParser.load_game_from_offset(file_path, explorer.selected_offset, game_window.game_state)
+                
+                if headers:
+                    white = headers.get("White", "Alb")
+                    black = headers.get("Black", "Negru")
+                    date = headers.get("Date", "????")
+                    
+                    game_window.setWindowTitle(f"{white} vs {black} ({date})")
+                    game_window.update_notation()
+                    game_window.board_widget.draw_board_and_pieces()
+                    
+                    game_window.show()
+                else:
+                    QMessageBox.critical(self, "Eroare", "Nu s-a putut parsa meciul ales din baza de date!")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

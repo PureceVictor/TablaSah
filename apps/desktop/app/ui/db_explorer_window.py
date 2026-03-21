@@ -1,79 +1,187 @@
 # app/ui/db_explorer_window.py
-from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-                             QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView)
+import os
+import sqlite3
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, 
+                             QHeaderView, QLabel, QProgressBar, QPushButton, QStackedWidget, QMessageBox, QWidget)
 from PyQt6.QtCore import Qt
-from app.ui.game_window import GameWindow
+from app.core.db_builder import DatabaseBuilderWorker
 
-class DatabaseExplorerWindow(QMainWindow):
-    def __init__(self, db_name):
-        super().__init__()
-        self.setWindowTitle(f"Database Explorer - {db_name}")
-        self.setMinimumSize(900, 600)
+class DatabaseExplorerWindow(QDialog):
+    def __init__(self, file_path, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Database Explorer - {os.path.basename(file_path)}")
+        self.setMinimumSize(1000, 600)
+        self.file_path = file_path
+        self.db_path = file_path + ".db" # Aici va cauta booster-ul nostru SQLite
+        self.selected_offset = None
+        self.loaded_rows = 0
+        self.batch_size = 1000
         
-        # Salvam instantele partidelor deschise din aceasta baza de date
-        self.active_games = []
+        # QStackedWidget ne permite sa trecem de la 'Loading' la 'Tabel' fara sa deschidem alte ferestre
+        self.stack = QStackedWidget(self)
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.stack)
         
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        layout = QVBoxLayout(central_widget)
+        self.setup_loading_ui()
+        self.setup_table_ui()
         
-        # --- ZONA DE SUS: Bara de Cautare ---
-        search_layout = QHBoxLayout()
-        self.search_bar = QLineEdit()
-        self.search_bar.setPlaceholderText("Cauta jucator (ex: Kasparov, Carlsen)...")
-        self.search_bar.setFixedHeight(35)
+        # LOGICA DE RUTARE: Avem deja indexul construit?
+        if os.path.exists(self.db_path):
+            self.stack.setCurrentWidget(self.page_table)
+            self.load_data_from_db()
+        else:
+            self.stack.setCurrentWidget(self.page_loading)
+            self.start_indexing()
+            
+    def setup_loading_ui(self):
+        """Construieste ecranul de incarcare cu Bara de Progres"""
+        self.page_loading = QWidget()
+        layout = QVBoxLayout(self.page_loading)
         
-        btn_search = QPushButton("Cauta")
-        btn_search.setFixedHeight(35)
-        btn_search.setFixedWidth(100)
+        self.lbl_status = QLabel("Se construieste indexul bazei de date (doar prima data)...")
+        self.lbl_status.setStyleSheet("font-size: 16px; font-weight: bold; color: #333;")
+        self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
-        search_layout.addWidget(self.search_bar)
-        search_layout.addWidget(btn_search)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setFixedHeight(30)
+        self.progress_bar.setStyleSheet("QProgressBar { border: 1px solid #ccc; border-radius: 5px; text-align: center; font-weight: bold; } QProgressBar::chunk { background-color: #4CAF50; width: 20px; }")
         
-        # --- ZONA DE JOS: Tabelul cu Partide ---
-        self.games_table = QTableWidget()
-        self.games_table.setColumnCount(6)
-        self.games_table.setHorizontalHeaderLabels(["Alb", "ELO Alb", "Negru", "ELO Negru", "Rezultat", "Data"])
+        self.btn_cancel = QPushButton("Anuleaza Indexarea")
+        self.btn_cancel.setFixedWidth(200)
+        self.btn_cancel.setStyleSheet("background-color: #f44336; color: white; font-weight: bold; padding: 8px;")
+        self.btn_cancel.clicked.connect(self.cancel_indexing)
         
-        # Facem tabelul sa se intinda frumos pe tot ecranul
-        header = self.games_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch) # Numele albului
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch) # Numele negrului
+        layout.addStretch()
+        layout.addWidget(self.lbl_status)
+        layout.addWidget(self.progress_bar)
+        layout.addWidget(self.btn_cancel, alignment=Qt.AlignmentFlag.AlignCenter)
+        layout.addStretch()
         
-        # Setam comportamentul de selectie (sa selecteze toata linia, nu doar o celula)
-        self.games_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.games_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers) # Read-only
+        self.stack.addWidget(self.page_loading)
         
-        # Conectam dublu-click-ul pe un rand pentru a deschide partida
-        self.games_table.itemDoubleClicked.connect(self.open_selected_game)
+    def setup_table_ui(self):
+        """Construieste ecranul cu Tabelul de meciuri"""
+        self.page_table = QWidget()
+        layout = QVBoxLayout(self.page_table)
         
-        layout.addLayout(search_layout)
-        layout.addWidget(self.games_table)
+        self.lbl_info = QLabel("Se incarca...")
+        self.lbl_info.setStyleSheet("font-weight: bold; font-size: 14px; color: #2196F3;")
         
-        # Incarcam niste date de test (Mock Data)
-        self.load_mock_data()
+        self.table = QTableWidget()
+        self.table.setColumnCount(7)
+        self.table.setHorizontalHeaderLabels(["Alb", "ELO Alb", "Negru", "ELO Negru", "Rezultat", "Data", "Eveniment"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        
+        # --- FIX CULORI (Text negru, fundal alb/gri deschis alternat) ---
+        self.table.setAlternatingRowColors(True)
+        self.table.setStyleSheet("""
+            QTableWidget { font-size: 13px; color: #000000; background-color: #ffffff; alternate-background-color: #f2f2f2; } 
+            QHeaderView::section { font-weight: bold; background-color: #e0e0e0; color: #000000; }
+        """)
+        
+        self.table.itemDoubleClicked.connect(self.game_selected)
+        
+        # --- CONECTAM BARA DE SCROLL PENTRU INCARCARE INFINITA ---
+        self.table.verticalScrollBar().valueChanged.connect(self.on_scroll)
+        
+        layout.addWidget(self.lbl_info)
+        layout.addWidget(self.table)
+        self.stack.addWidget(self.page_table)
+        
+    def start_indexing(self):
+        """Porneste Muncitorul in fundal"""
+        self.worker = DatabaseBuilderWorker(self.file_path)
+        self.worker.progress.connect(self.update_progress)
+        self.worker.finished.connect(self.indexing_finished)
+        self.worker.error.connect(self.indexing_error)
+        self.worker.start() # Aici se lanseaza thread-ul!
+        
+    def update_progress(self, percent, text):
+        self.progress_bar.setValue(percent)
+        self.lbl_status.setText(text)
+        
+    def indexing_finished(self, db_path):
+        """Cand indexarea e gata, schimbam ecranul pe Tabel"""
+        self.stack.setCurrentWidget(self.page_table)
+        self.load_data_from_db()
+        
+    def indexing_error(self, err_msg):
+        QMessageBox.critical(self, "Eroare Indexare", f"A aparut o eroare critica:\n{err_msg}")
+        self.reject()
+        
+    def cancel_indexing(self):
+        """Daca te plictisesti, apesi anuleaza si inchide tot curat"""
+        if hasattr(self, 'worker'):
+            self.worker.cancel()
+        self.reject()
+        
+    def load_data_from_db(self):
+        """Pregateste tabelul si incarca primul pachet de date"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT COUNT(*) FROM games")
+            total_games = cursor.fetchone()[0]
+            self.lbl_info.setText(f"S-au gasit {total_games:,} partide. Fa scroll in jos pentru a incarca mai multe.")
+            
+            conn.close()
+            
+            # Resetam tabelul si incarcam primele 1000
+            self.table.setRowCount(0)
+            self.loaded_rows = 0
+            self.load_more_data()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Eroare Citire DB", f"Nu s-a putut incarca baza de date:\n{e}")
 
-    def load_mock_data(self):
-        """Functie temporara pentru a popula tabelul pana cand vom implementa parser-ul PGN"""
-        mock_games = [
-            ("Kasparov, Garry", "2812", "Topalov, Veselin", "2700", "1-0", "1999.01.20"),
-            ("Carlsen, Magnus", "2882", "Caruana, Fabiano", "2832", "1/2-1/2", "2018.11.09"),
-            ("Fischer, Bobby", "2780", "Spassky, Boris", "2660", "1-0", "1972.07.23")
-        ]
-        
-        self.games_table.setRowCount(len(mock_games))
-        for row_idx, game_data in enumerate(mock_games):
-            for col_idx, item_text in enumerate(game_data):
-                self.games_table.setItem(row_idx, col_idx, QTableWidgetItem(item_text))
+    def on_scroll(self, value):
+        """Se declanseaza cand misti de bara de scroll. Daca a ajuns jos, aduce date noi."""
+        scrollbar = self.table.verticalScrollBar()
+        if value == scrollbar.maximum():
+            self.load_more_data()
 
-    def open_selected_game(self, item):
-        """Se apeleaza la dublu-click pe un rand si deschide GameWindow"""
+    def load_more_data(self):
+        """Extrage urmatoarele 1000 de meciuri din baza de date si le adauga in tabel in 0.01 secunde"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Secretul este clauza OFFSET din SQL, care stie sa sara peste meciurile deja incarcate
+            cursor.execute(f"SELECT white, white_elo, black, black_elo, result, date, event, byte_offset FROM games LIMIT {self.batch_size} OFFSET {self.loaded_rows}")
+            rows = cursor.fetchall()
+            
+            if not rows:
+                conn.close()
+                return # Am ajuns la finalul celor 7 milioane de meciuri
+                
+            # Adaugam noile randuri la finalul tabelului
+            current_row_count = self.table.rowCount()
+            self.table.setRowCount(current_row_count + len(rows))
+            
+            for i, row_data in enumerate(rows):
+                row_idx = current_row_count + i
+                self.table.setItem(row_idx, 0, QTableWidgetItem(str(row_data[0])))
+                self.table.setItem(row_idx, 1, QTableWidgetItem(str(row_data[1])))
+                self.table.setItem(row_idx, 2, QTableWidgetItem(str(row_data[2])))
+                self.table.setItem(row_idx, 3, QTableWidgetItem(str(row_data[3])))
+                self.table.setItem(row_idx, 4, QTableWidgetItem(str(row_data[4])))
+                self.table.setItem(row_idx, 5, QTableWidgetItem(str(row_data[5])))
+                self.table.setItem(row_idx, 6, QTableWidgetItem(str(row_data[6])))
+                
+                # Salvam file offset-ul pentru PGN Parser
+                self.table.item(row_idx, 0).setData(Qt.ItemDataRole.UserRole, row_data[7])
+                
+            self.loaded_rows += len(rows)
+            conn.close()
+            
+        except Exception as e:
+            print(f"Eroare la incarcarea datelor: {e}")
+            
+    def game_selected(self, item):
         row = item.row()
-        white_player = self.games_table.item(row, 0).text()
-        black_player = self.games_table.item(row, 2).text()
-        
-        # Deschidem fereastra de joc
-        game = GameWindow()
-        game.setWindowTitle(f"{white_player} vs {black_player} - Analiza")
-        self.active_games.append(game)
-        game.show()
+        self.selected_offset = self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+        self.accept()
