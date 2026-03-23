@@ -677,9 +677,15 @@ class GameState():
         """Returneaza lista de mutari UCI de la radacina pana la pozitia curenta"""
         path = []
         curr = self.current_node
+        
+    
+        if curr is None:
+            return path
+            
         while curr.parent is not None:
             path.append(curr.move.get_uci())
             curr = curr.parent
+            
         path.reverse()
         return path
 

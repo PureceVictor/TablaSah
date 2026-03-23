@@ -14,13 +14,15 @@ class EngineWorker(QThread):
         self.uci_moves = []
         self.is_running = True
         self.needs_restart = False
+        self.start_fen = None
         
         # --- NOU: Gestiunea dinamica a liniilor ---
         self.num_lines = 3
         self.lines = {i: "" for i in range(1, self.num_lines + 1)}
 
-    def update_position(self, uci_moves):
+    def update_position(self, uci_moves, start_fen=None):
         self.uci_moves = uci_moves
+        self.start_fen = start_fen
         self.needs_restart = True
         
     def set_lines(self, num_lines):
@@ -47,9 +49,17 @@ class EngineWorker(QThread):
 
         while self.is_running:
             if self.needs_restart:
-                board = chess.Board()
+                if hasattr(self, 'start_fen') and self.start_fen is not None:
+                    board = chess.Board(self.start_fen)
+                else:
+                    board = chess.Board()
                 for move in self.uci_moves:
-                    board.push_uci(move)
+                    try:
+                        board.push_uci(move)
+                    except ValueError:
+                        print(f"Eroare: Mutarea {move} este ilegala pentru pozitia curenta!")
+                        break 
+                        
                 self.needs_restart = False
                 # Resetam dictionarul de linii pentru noua dimensiune
                 self.lines = {i: "" for i in range(1, self.num_lines + 1)}

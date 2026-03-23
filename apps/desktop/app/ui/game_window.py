@@ -1,5 +1,6 @@
 # app/ui/game_window.py
 import os
+import chess
 from app.core.engine_worker import EngineWorker
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QTextEdit, QSplitter, QTabWidget, QToolBar, QTextBrowser,
@@ -7,6 +8,7 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLa
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut, QFont
 from PyQt6.QtCore import Qt
 
+from app.ui.edit_position_dialog import EditPositionDialog
 from app.core.game_manager import GameState
 from app.ui.board_widget import BoardWidget
 from app.ui.engine_settings_dialog import EngineSettingsDialog
@@ -146,7 +148,98 @@ class GameWindow(QMainWindow):
         engine_settings_action.triggered.connect(self.action_engine_settings)
         engine_menu.addAction(engine_settings_action)
 
+        edit_pos_action = QAction("Edit Position...", self)
+        edit_pos_action.triggered.connect(self.action_edit_position)
+        engine_menu.addAction(edit_pos_action)
+
     # --- ACTIUNILE BUTOANELOR ---
+
+    def action_edit_position(self):
+        """Deschide editorul vizual de pozitii"""
+        current_fen = ""
+        for r in range(8):
+            empty = 0
+            for c in range(8):
+                piece = self.game_state.board[r][c]
+                if piece == "--":
+                    empty += 1
+                else:
+                    if empty > 0:
+                        current_fen += str(empty)
+                        empty = 0
+                    current_fen += piece[1].upper() if piece[0] == 'w' else piece[1].lower()
+            if empty > 0:
+                current_fen += str(empty)
+            if r < 7:
+                current_fen += "/"
+                
+        current_fen += " w KQkq - 0 1"
+        
+        dialog = EditPositionDialog(current_fen, self)
+        if dialog.exec():
+            new_fen = dialog.get_generated_fen()
+            
+            try:
+                # --- BLINDAM SALVAREA FEN-ULUI ---
+                self.game_state.custom_start_fen = new_fen 
+                
+                fen_to_piece = {
+                    'P': 'wP', 'N': 'wN', 'B': 'wB', 'R': 'wR', 'Q': 'wQ', 'K': 'wK',
+                    'p': 'bP', 'n': 'bN', 'b': 'bB', 'r': 'bR', 'q': 'bQ', 'k': 'bK'
+                }
+                
+                parts = new_fen.split(" ")
+                ranks = parts[0].split("/")
+                
+                # Suprascriem patrat cu patrat matricea ta vizuala
+                for r in range(8):
+                    c = 0
+                    for char in ranks[r]:
+                        if char.isdigit():
+                            for i in range(int(char)):
+                                self.game_state.board[r][c] = "--"
+                                c += 1
+                        else:
+                            self.game_state.board[r][c] = fen_to_piece[char]
+                            c += 1
+                            
+                self.game_state.whiteToMove = (parts[1] == 'w')
+                
+                # HARD RESET PENTRU ISTORIC (python-chess)
+                # --- ADEVARATUL HARD RESET (Pentru arborele tau Custom!) ---
+                self.game_state.custom_start_fen = new_fen
+                
+                # Ne derulam manual in arborele tau inapoi pana la radacina (Mutarea 0)
+                if hasattr(self.game_state, 'current_node') and self.game_state.current_node is not None:
+                    radacina = self.game_state.current_node
+                    while radacina.parent is not None:
+                        radacina = radacina.parent
+                    
+                    # Acum ca am ajuns la inceput, setam pozitia curenta aici
+                    self.game_state.current_node = radacina
+                    
+                    # Optional: Poti sa ii si tai crengile (ca sa nu poti da Redo in vechiul meci)
+                    if hasattr(radacina, 'children'):
+                        radacina.children = []
+                
+                # Golim lista ta simpla de mutari
+                self.game_state.moveLog = [] 
+                
+                self.tab_notation.clear()
+                self.tab_training.clear()
+                
+                # Fortam redesenarea placii video
+                if hasattr(self, 'board_widget'):
+                    self.board_widget.valid_moves = self.game_state.allValidMoves()
+                    self.board_widget.draw_board_and_pieces()
+                    self.board_widget.scene.update() 
+                
+                # Acum get_current_uci_path() va citi de la radacina si va returna garantat []
+                self.notify_engine()
+                    
+            except Exception as e:
+                QMessageBox.critical(self, "Eroare FEN", f"A aparut o eroare la aplicarea pozitiei:\n{e}")
+
     def action_new_game(self):
         new_window = GameWindow()
         self.child_windows.append(new_window)
@@ -163,13 +256,6 @@ class GameWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Eroare", f"Nu s-a putut salva fisierul:\n{e}")
 
-    def action_edit_position(self):
-        fen, ok = QInputDialog.getText(self, "Seteaza Pozitia", "Introdu codul FEN:")
-        if ok and fen:
-            self.game_state.load_fen(fen)
-            # Aici vom redesena tabla dupa ce facem functia in backend
-            # self.board_widget.draw_board_and_pieces()
-
     def action_toggle_engine(self):
         """Arata sau ascunde panoul verde de Stockfish"""
         if self.engine_container.isHidden():      # <-- Modificat
@@ -184,8 +270,7 @@ class GameWindow(QMainWindow):
                 self.engine_worker.update_signal.connect(self.update_engine_ui)
                 self.engine_worker.start()
                 
-            uci_path = self.game_state.get_current_uci_path()
-            self.engine_worker.update_position(uci_path)
+            self.notify_engine()
         else:
             self.engine_container.hide()          # <-- Modificat
             if self.engine_worker is not None:
@@ -246,11 +331,7 @@ class GameWindow(QMainWindow):
         else:
             self.tab_training.setHtml("<i>Asteapta prima mutare...</i>")
 
-        if hasattr(self, 'engine_worker') and self.engine_worker is not None:
-            # Daca panoul verde este deschis, ii trimitem noul drum de mutari (UCI)
-            if not self.engine_container.isHidden():
-                uci_path = self.game_state.get_current_uci_path()
-                self.engine_worker.update_position(uci_path)
+        self.notify_engine()
 
     def on_notation_clicked(self, url):
         url_str = url.toString()
@@ -292,3 +373,20 @@ class GameWindow(QMainWindow):
         self.lines_label.setText(f"Linii: {self.engine_num_lines}")
         if self.engine_worker is not None:
             self.engine_worker.set_lines(self.engine_num_lines)
+
+
+    def notify_engine(self):
+        """Trimite pozitia radacina si istoricul corect catre Stockfish"""
+        if hasattr(self, 'engine_worker') and self.engine_worker is not None and not self.engine_container.isHidden():
+            uci_path = self.game_state.get_current_uci_path()
+            
+            # Extragem FEN-ul. Daca nu exista (meci normal), va fi None
+            start_fen = getattr(self.game_state, 'custom_start_fen', None)
+            
+            # --- DEBUG RADAR ---
+            print(f"------------ ENGINE SYNC ------------")
+            print(f"FEN-ul trimis: {start_fen}")
+            print(f"Mutarile trimise: {uci_path}")
+            print(f"-------------------------------------")
+                
+            self.engine_worker.update_position(uci_path, start_fen)
