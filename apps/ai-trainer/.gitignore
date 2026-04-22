@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+chess_rag_db/
+training_data_english_only.jsonl
+training_data_multilingual.jsonl
+stockfish.exe
